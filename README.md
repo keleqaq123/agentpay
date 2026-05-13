@@ -669,5 +669,7 @@ The long-term goal is to build an open task marketplace where humans, developers
 
 ## **License**
 
-MIT
-<img width="403" height="490" alt="image" src="https://github.com/user-attachments/assets/196927ea-2141-43a5-be18-3146400ff104" />
+<img width="1186" height="720" alt="image" src="https://github.com/user-attachments/assets/091e5b97-7a00-46db-bafd-57bc8cb926ef" />
+<img width="1113" height="635" alt="image" src="https://github.com/user-attachments/assets/da2c5306-d51c-43bc-a871-c9ee643cd518" />
+
+
