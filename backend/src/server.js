@@ -17,12 +17,44 @@ const ARC_RPC_URL =
   process.env.ARC_RPC_URL || "https://rpc.testnet.arc.network";
 const ESCROW_ADDRESS = process.env.ESCROW_ADDRESS;
 
-const DATA_DIR = path.resolve("data");
+const DATA_DIR = path.resolve(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "db.json");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 const statusNames = ["Open", "Accepted", "Submitted", "Completed", "Cancelled"];
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  process.env.FRONTEND_URL,
+  process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+  ...(process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").map((item) => item.trim())
+    : []),
+].filter(Boolean);
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    if (origin.endsWith(".vercel.app")) {
+      return callback(null, true);
+    }
+
+    return callback(null, false);
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
 
 const arcTestnet = defineChain({
   id: 5042002,
@@ -108,6 +140,7 @@ function readDb() {
 }
 
 function writeDb(db) {
+  ensureDatabase();
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
 }
 
@@ -143,7 +176,11 @@ function inferCategory(title, description) {
     return "Data Analysis";
   }
 
-  if (text.includes("twitter") || text.includes("social") || text.includes("content")) {
+  if (
+    text.includes("twitter") ||
+    text.includes("social") ||
+    text.includes("content")
+  ) {
     return "Social Media Content";
   }
 
@@ -193,7 +230,7 @@ function formatTask(rawTask) {
 
 async function getOnchainTasks() {
   if (!ESCROW_ADDRESS || !isAddress(ESCROW_ADDRESS)) {
-    throw new Error("Missing or invalid ESCROW_ADDRESS in backend .env");
+    throw new Error("Missing or invalid ESCROW_ADDRESS in backend environment");
   }
 
   const count = await publicClient.readContract({
@@ -226,12 +263,13 @@ async function getEnrichedTasks() {
 
   return tasks.map((task) => {
     const meta = db.taskMeta[String(task.id)] || {};
-    const ratings = db.ratings.filter((rating) => Number(rating.taskId) === task.id);
+    const ratings = db.ratings.filter(
+      (rating) => Number(rating.taskId) === task.id
+    );
 
     return {
       ...task,
-      category:
-        meta.category || inferCategory(task.title, task.description),
+      category: meta.category || inferCategory(task.title, task.description),
       tags: meta.tags || [],
       deadline: meta.deadline || null,
       priority: meta.priority || "Normal",
@@ -326,17 +364,7 @@ function buildAgentStats(address, tasks) {
 
 const app = express();
 
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-      "http://localhost:4173",
-      "http://127.0.0.1:4173",
-    ],
-  })
-);
-
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (req, res) => {
@@ -345,7 +373,9 @@ app.get("/", (req, res) => {
     status: "running",
     chain: "Arc Testnet",
     chainId: 5042002,
-    escrowAddress: ESCROW_ADDRESS,
+    rpcUrl: ARC_RPC_URL,
+    escrowAddress: ESCROW_ADDRESS || null,
+    allowedOrigins,
   });
 });
 
@@ -365,7 +395,7 @@ app.get("/api/config", (req, res) => {
       explorer: "https://testnet.arcscan.app",
     },
     contracts: {
-      escrow: ESCROW_ADDRESS,
+      escrow: ESCROW_ADDRESS || null,
       usdc: "0x3600000000000000000000000000000000000000",
     },
   });
@@ -374,7 +404,6 @@ app.get("/api/config", (req, res) => {
 app.get("/api/tasks", async (req, res) => {
   try {
     const tasks = await getEnrichedTasks();
-
     const { status, category, address } = req.query;
 
     let filtered = tasks;
@@ -391,6 +420,7 @@ app.get("/api/tasks", async (req, res) => {
 
     if (address) {
       const normalized = normalizeAddress(String(address));
+
       filtered = filtered.filter(
         (task) =>
           sameAddress(task.client, normalized) ||
@@ -404,6 +434,7 @@ app.get("/api/tasks", async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
     res.status(500).json({
       error: error.message || "Failed to fetch tasks",
     });
@@ -414,7 +445,6 @@ app.get("/api/tasks/:id", async (req, res) => {
   try {
     const tasks = await getEnrichedTasks();
     const id = Number(req.params.id);
-
     const task = tasks.find((item) => item.id === id);
 
     if (!task) {
@@ -426,6 +456,7 @@ app.get("/api/tasks/:id", async (req, res) => {
     res.json({ task });
   } catch (error) {
     console.error(error);
+
     res.status(500).json({
       error: error.message || "Failed to fetch task",
     });
@@ -438,6 +469,7 @@ app.get("/api/stats", async (req, res) => {
     res.json(buildStats(tasks));
   } catch (error) {
     console.error(error);
+
     res.status(500).json({
       error: error.message || "Failed to fetch stats",
     });
@@ -452,6 +484,7 @@ app.get("/api/agents/:address", async (req, res) => {
     res.json(stats);
   } catch (error) {
     console.error(error);
+
     res.status(400).json({
       error: error.message || "Failed to fetch agent profile",
     });
@@ -461,7 +494,6 @@ app.get("/api/agents/:address", async (req, res) => {
 app.post("/api/profiles", (req, res) => {
   try {
     const { address, name, bio, skills, avatar } = req.body;
-
     const normalized = normalizeAddress(address);
     const db = readDb();
 
@@ -484,6 +516,7 @@ app.post("/api/profiles", (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
     res.status(400).json({
       error: error.message || "Failed to save profile",
     });
@@ -522,6 +555,7 @@ app.post("/api/task-meta", (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
     res.status(400).json({
       error: error.message || "Failed to save task metadata",
     });
@@ -579,9 +613,7 @@ app.post("/api/ratings", async (req, res) => {
     const db = readDb();
 
     const existingIndex = db.ratings.findIndex(
-      (item) =>
-        Number(item.taskId) === id &&
-        sameAddress(item.rater, normalizedRater)
+      (item) => Number(item.taskId) === id && sameAddress(item.rater, normalizedRater)
     );
 
     const ratingRecord = {
@@ -607,6 +639,7 @@ app.post("/api/ratings", async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
     res.status(400).json({
       error: error.message || "Failed to save rating",
     });
@@ -620,11 +653,11 @@ app.listen(PORT, () => {
   console.log("==========================================");
   console.log(" AgentPay Backend is running");
   console.log("==========================================");
-  console.log(` Local:          http://localhost:${PORT}`);
-  console.log(` Health:         http://localhost:${PORT}/health`);
-  console.log(` Tasks API:      http://localhost:${PORT}/api/tasks`);
-  console.log(` Stats API:      http://localhost:${PORT}/api/stats`);
-  console.log(` Escrow:         ${ESCROW_ADDRESS}`);
+  console.log(` Local: http://localhost:${PORT}`);
+  console.log(` Health: http://localhost:${PORT}/health`);
+  console.log(` Tasks API: http://localhost:${PORT}/api/tasks`);
+  console.log(` Stats API: http://localhost:${PORT}/api/stats`);
+  console.log(` Escrow: ${ESCROW_ADDRESS || "Not configured"}`);
   console.log("==========================================");
   console.log("");
 });
